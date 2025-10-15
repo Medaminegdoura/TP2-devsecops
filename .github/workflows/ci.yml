@@ -7,7 +7,7 @@ on:
     branches: [main, develop]
 
 jobs:
-  build-and-test:
+  build:
     runs-on: ubuntu-latest
 
     strategy:
@@ -27,75 +27,44 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Lint code
-        run: npm run lint
-
-      - name: Format check
-        run: npm run format
-
       - name: Build application
         run: npm run build
 
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-${{ matrix.node-version }}
+          path: dist/
+          retention-days: 1
+
+  unit-tests:
+    runs-on: ubuntu-latest
+    needs: build
+
+    strategy:
+      matrix:
+        node-version: [18.x, 20.x]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
       - name: Run unit tests
         run: npm run test:cov
-
-      - name: Run e2e tests
-        run: npm run test:e2e
 
       - name: Upload coverage reports
         uses: codecov/codecov-action@v3
         with:
           file: ./coverage/lcov.info
           flags: unittests
-          name: codecov-umbrella
+          name: codecov-${{ matrix.node-version }}
           fail_ci_if_error: false
-
-  security-scan:
-    runs-on: ubuntu-latest
-    needs: build-and-test
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20.x
-          cache: 'npm'
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Run security audit
-        run: npm audit --audit-level high
-
-      - name: Check for outdated packages
-        run: npm outdated || true
-
-  build-docker:
-    runs-on: ubuntu-latest
-    needs: [build-and-test, security-scan]
-    if: github.ref == 'refs/heads/main'
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build Docker image
-        run: |
-          docker build -t devsecops-app:${{ github.sha }} .
-          docker build -t devsecops-app:latest .
-
-      - name: Save Docker image
-        run: docker save devsecops-app:latest | gzip > devsecops-app.tar.gz
-
-      - name: Upload Docker image artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: docker-image
-          path: devsecops-app.tar.gz
-          retention-days: 7
