@@ -69,8 +69,8 @@ jobs:
           name: codecov
           fail_ci_if_error: false
 
-  security-scan:
-    name: Security Scan (SAST + SCA)
+  sast:
+    name: SAST
     runs-on: ubuntu-latest
     needs: test
 
@@ -104,13 +104,14 @@ jobs:
   sca-dependency-check:
     name: OWASP Dependency-Check
     runs-on: ubuntu-latest
+    needs: sast
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Dependency-Check
         run: |
-          wget https://github.com/jeremylong/DependencyCheck/releases/download/v10.0.4/dependency-check-10.0.4-release.zip
-          unzip dependency-check-10.0.4-release.zip
+          wget https://github.com/jeremylong/DependencyCheck/releases/download/v10.0.6/dependency-check-10.0.6-release.zip
+          unzip dependency-check-10.0.6-release.zip
           mv dependency-check /usr/local/bin/dependency-check
 
       - name: Run Dependency Check
