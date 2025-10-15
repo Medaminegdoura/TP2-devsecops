@@ -22,9 +22,11 @@ describe('UsersService', () => {
       const user = await service.createUser('John Doe', 'john@example.com');
 
       expect(user).toMatchObject({
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
         id: expect.any(Number),
         name: 'John Doe',
         email: 'john@example.com',
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
         createdAt: expect.any(Date),
         isActive: true,
       });
