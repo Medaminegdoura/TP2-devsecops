@@ -110,8 +110,8 @@ jobs:
 
       - name: Install Dependency-Check
         run: |
-          wget https://github.com/jeremylong/DependencyCheck/releases/download/v10.0.5/dependency-check-10.0.5-release.zip
-          unzip dependency-check-10.0.5-release.zip
+          wget hhttps://github.com/jeremylong/DependencyCheck/releases/download/v12.1.0/dependency-check-12.1.0-release.zip
+          unzip dependency-check-12.1.0-release.zip
           mv dependency-check /usr/local/bin/dependency-check
 
       - name: Run Dependency Check
