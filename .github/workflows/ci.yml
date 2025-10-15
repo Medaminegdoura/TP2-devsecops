@@ -101,23 +101,130 @@ jobs:
   #             print("✅ No high/critical SAST issues")
   #         PY
 
-  sonarqube:
-    name: SonarQube
+  # Security Scanning Jobs
+  npm-audit:
+    name: npm Audit Security Check
     runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run npm audit with quality gate
+        run: |
+          echo "🔍 Running npm audit for HIGH/CRITICAL vulnerabilities..."
+          npm audit --audit-level=high --json > audit-results.json || true
+
+          # Check for HIGH/CRITICAL vulnerabilities
+          if [ -s audit-results.json ]; then
+            echo "📊 Analyzing audit results..."
+            HIGH_CRITICAL=$(cat audit-results.json | jq -r '.vulnerabilities | to_entries[] | select(.value.severity == "high" or .value.severity == "critical") | .key' | wc -l)
+            
+            if [ "$HIGH_CRITICAL" -gt 0 ]; then
+              echo "❌ Found $HIGH_CRITICAL HIGH/CRITICAL vulnerabilities:"
+              cat audit-results.json | jq -r '.vulnerabilities | to_entries[] | select(.value.severity == "high" or .value.severity == "critical") | "- \(.key): \(.value.severity) - \(.value.title)"'
+              echo "🚫 Pipeline blocked due to security vulnerabilities"
+              exit 1
+            else
+              echo "✅ No HIGH/CRITICAL vulnerabilities found"
+            fi
+          else
+            echo "✅ No vulnerabilities found"
+          fi
+
+  trivy-scan:
+    name: Trivy Security Scanner
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run Trivy filesystem scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-fs-results.sarif'
+          severity: 'HIGH,CRITICAL'
+          exit-code: '1'
+
+      - name: Upload Trivy SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-fs-results.sarif
+
+  sonarqube:
+    name: SonarQube Analysis
+    runs-on: ubuntu-latest
+    needs: test
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0 # Shallow clones should be disabled for a better relevancy of analysis
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
       - name: SonarQube Scan
         uses: SonarSource/sonarqube-scan-action@v6
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
+      - name: SonarCloud Quality Gate Check
+        id: sonarcloud-quality-gate-check
+        uses: sonarqube-quality-gate-action@master
+        timeout-minutes: 5
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+      - name: Check Quality Gate Status
+        if: steps.sonarcloud-quality-gate-check.outputs.qgstatus != 'OK'
+        run: |
+          echo "❌ SonarCloud Quality Gate failed with status: ${{ steps.sonarcloud-quality-gate-check.outputs.qgstatus }}"
+          exit 1
+
   sca-dependency-check:
     name: OWASP Dependency-Check
     runs-on: ubuntu-latest
+    needs: test
     steps:
       - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
 
       - name: Install Dependency-Check
         run: |
@@ -125,18 +232,182 @@ jobs:
           unzip dependency-check-12.1.0-release.zip
           mv dependency-check /usr/local/bin/dependency-check
 
-      - name: Run Dependency Check
+      - name: Run Dependency Check with Quality Gate
         run: |
+          echo "🔍 Running OWASP Dependency-Check with CVSS threshold 7.0..."
           /usr/local/bin/dependency-check/bin/dependency-check.sh \
-          --project "MyProject" \
+          --project "DevSecOps-NestJS" \
           --scan . \
+          --format "JSON" \
           --format "HTML" \
           --out reports \
+          --failOnCVSS 7 \
           --nvdApiKey ${{ secrets.NVD_API_KEY }} \
-          --disableOssIndex
+          --disableOssIndex || DEPENDENCY_CHECK_EXIT_CODE=$?
+
+          # Check if scan failed due to high CVSS
+          if [ ${DEPENDENCY_CHECK_EXIT_CODE:-0} -ne 0 ]; then
+            echo "❌ OWASP Dependency-Check found vulnerabilities with CVSS >= 7.0"
+            echo "📊 Checking report for details..."
+            if [ -f reports/dependency-check-report.json ]; then
+              HIGH_VULNS=$(cat reports/dependency-check-report.json | jq -r '.dependencies[]?.vulnerabilities[]? | select(.cvssv3.baseScore >= 7.0) | .name' | wc -l)
+              echo "Found $HIGH_VULNS high-severity vulnerabilities"
+            fi
+            echo "🚫 Pipeline blocked due to dependency vulnerabilities"
+            exit 1
+          else
+            echo "✅ No high-severity dependency vulnerabilities found"
+          fi
 
       - name: Upload Report
         uses: actions/upload-artifact@v4
         with:
           name: dependency-check-report
           path: reports
+
+  # SAST Scanning
+  semgrep-sast:
+    name: Semgrep SAST Scan
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Semgrep
+        run: pip install semgrep
+
+      - name: Run Semgrep SAST
+        run: |
+          echo "🔍 Running Semgrep SAST scan..."
+          semgrep --config=p/security-audit,p/owasp-top-ten,p/secrets \
+          --json --output=semgrep-report.json || true
+
+          # Parse results and fail on HIGH/CRITICAL
+          python3 - <<'PY'
+          import json, sys
+          try:
+              with open('semgrep-report.json') as f:
+                  data = json.load(f)
+              
+              findings = [r for r in data.get('results', []) 
+                         if r.get('extra', {}).get('severity') in ['ERROR','HIGH','CRITICAL']]
+              
+              if findings:
+                  print(f"❌ SAST found {len(findings)} high/critical issues:")
+                  for fnd in findings:
+                      severity = fnd.get('extra', {}).get('severity', 'UNKNOWN')
+                      check_id = fnd.get('check_id', 'UNKNOWN')
+                      path = fnd.get('path', 'UNKNOWN')
+                      line = fnd.get('start', {}).get('line', 'UNKNOWN')
+                      message = fnd.get('extra', {}).get('message', 'No message')
+                      print(f"- {check_id} ({severity}) at {path}:{line}")
+                      print(f"  {message}")
+                  sys.exit(1)
+              else:
+                  print("✅ No high/critical SAST issues found")
+          except Exception as e:
+              print(f"Error parsing Semgrep results: {e}")
+              sys.exit(1)
+          PY
+
+      - name: Upload Semgrep SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: semgrep-report.json
+
+  # DAST Scanning with OWASP ZAP
+  dast-zap-scan:
+    name: OWASP ZAP DAST Scan
+    runs-on: ubuntu-latest
+    needs: [build, test]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Start application with Docker Compose
+        run: |
+          docker-compose -f docker-compose.test.yml up -d
+          sleep 30
+
+      - name: Wait for application to be ready
+        run: |
+          timeout 60 bash -c 'until curl -f http://localhost:3000; do sleep 2; done'
+
+      - name: Run OWASP ZAP Baseline Scan
+        uses: zaproxy/action-baseline@v0.7.0
+        with:
+          target: 'http://localhost:3000'
+          rules_file_name: '.zap/rules.tsv'
+          cmd_options: '-a'
+
+      - name: Run OWASP ZAP Full Scan
+        uses: zaproxy/action-full-scan@v0.4.0
+        with:
+          target: 'http://localhost:3000'
+          rules_file_name: '.zap/rules.tsv'
+          cmd_options: '-a'
+
+      - name: Stop application
+        if: always()
+        run: docker-compose -f docker-compose.test.yml down
+
+  # Final Security Quality Gate
+  security-quality-gate:
+    name: Security Quality Gate
+    runs-on: ubuntu-latest
+    needs:
+      [
+        npm-audit,
+        trivy-scan,
+        sonarqube,
+        sca-dependency-check,
+        semgrep-sast,
+        dast-zap-scan,
+      ]
+    if: always()
+
+    steps:
+      - name: Check security scan results
+        run: |
+          echo "🔍 Checking security scan results..."
+          echo "npm-audit: ${{ needs.npm-audit.result }}"
+          echo "trivy-scan: ${{ needs.trivy-scan.result }}"
+          echo "sonarqube: ${{ needs.sonarqube.result }}"
+          echo "sca-dependency-check: ${{ needs.sca-dependency-check.result }}"
+          echo "semgrep-sast: ${{ needs.semgrep-sast.result }}"
+          echo "dast-zap-scan: ${{ needs.dast-zap-scan.result }}"
+
+          FAILED_SCANS=0
+          if [[ "${{ needs.npm-audit.result }}" == "failure" ]]; then
+            echo "❌ npm audit failed"
+            FAILED_SCANS=$((FAILED_SCANS + 1))
+          fi
+          if [[ "${{ needs.trivy-scan.result }}" == "failure" ]]; then
+            echo "❌ Trivy scan failed"
+            FAILED_SCANS=$((FAILED_SCANS + 1))
+          fi
+          if [[ "${{ needs.sonarqube.result }}" == "failure" ]]; then
+            echo "❌ SonarQube failed"
+            FAILED_SCANS=$((FAILED_SCANS + 1))
+          fi
+          if [[ "${{ needs.sca-dependency-check.result }}" == "failure" ]]; then
+            echo "❌ OWASP Dependency-Check failed"
+            FAILED_SCANS=$((FAILED_SCANS + 1))
+          fi
+          if [[ "${{ needs.semgrep-sast.result }}" == "failure" ]]; then
+            echo "❌ Semgrep SAST failed"
+            FAILED_SCANS=$((FAILED_SCANS + 1))
+          fi
+          if [[ "${{ needs.dast-zap-scan.result }}" == "failure" ]]; then
+            echo "❌ OWASP ZAP DAST failed"
+            FAILED_SCANS=$((FAILED_SCANS + 1))
+          fi
+
+          if [ $FAILED_SCANS -gt 0 ]; then
+            echo "🚫 Pipeline blocked: $FAILED_SCANS security scan(s) failed"
+            exit 1
+          else
+            echo "✅ All security scans passed - deployment approved"
+          fi
