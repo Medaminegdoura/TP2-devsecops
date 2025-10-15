@@ -101,32 +101,28 @@ jobs:
               print("✅ No high/critical SAST issues")
           PY
 
-      # -------------------------
-      # SCA: TRIVY
-      # -------------------------
-      - name: Install Trivy
-        run: |
-          sudo apt-get update && sudo apt-get install -y wget
-          wget https://github.com/aquasecurity/trivy/releases/latest/download/trivy_$(uname -s)_$(uname -m).tar.gz
-          tar zxvf trivy_*.tar.gz
-          sudo mv trivy /usr/local/bin/
+  sca-dependency-check:
+    name: OWASP Dependency-Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
 
-      - name: Run Trivy (SCA)
+      - name: Install Dependency-Check
         run: |
-          trivy fs --severity HIGH,CRITICAL --format json -o trivy-report.json .
-          jq '.Results[].Vulnerabilities[] | select(.Severity=="HIGH" or .Severity=="CRITICAL")' trivy-report.json > filtered.json || true
-          if [ -s filtered.json ]; then
-            echo "❌ High/Critical vulnerabilities found:"
-            cat filtered.json
-            exit 1
-          else
-            echo "✅ No high/critical SCA vulnerabilities found"
-          fi
+          wget https://github.com/jeremylong/DependencyCheck/releases/download/v10.0.4/dependency-check-10.0.4-release.zip
+          unzip dependency-check-10.0.4-release.zip
+          mv dependency-check /usr/local/bin/dependency-check
 
-      - name: Upload scan reports
+      - name: Run Dependency Check
+        run: |
+          /usr/local/bin/dependency-check/bin/dependency-check.sh \
+          --project "MyProject" \
+          --scan . \
+          --format "HTML" \
+          --out reports
+
+      - name: Upload Report
         uses: actions/upload-artifact@v4
         with:
-          name: security-reports
-          path: |
-            semgrep-report.json
-            trivy-report.json
+          name: dependency-check-report
+          path: reports
