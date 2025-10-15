@@ -132,7 +132,8 @@ jobs:
           --scan . \
           --format "HTML" \
           --out reports \
-          --nvdApiKey ${{ secrets.NVD_API_KEY }}
+          --nvdApiKey ${{ secrets.NVD_API_KEY }} \
+          --disableOssIndex
 
       - name: Upload Report
         uses: actions/upload-artifact@v4
