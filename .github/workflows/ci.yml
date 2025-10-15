@@ -110,8 +110,8 @@ jobs:
 
       - name: Install Dependency-Check
         run: |
-          wget https://github.com/jeremylong/DependencyCheck/releases/download/v10.0.6/dependency-check-10.0.6-release.zip
-          unzip dependency-check-10.0.6-release.zip
+          wget https://github.com/jeremylong/DependencyCheck/releases/download/v10.0.5/dependency-check-10.0.5-release.zip
+          unzip dependency-check-10.0.5-release.zip
           mv dependency-check /usr/local/bin/dependency-check
 
       - name: Run Dependency Check
@@ -121,6 +121,7 @@ jobs:
           --scan . \
           --format "HTML" \
           --out reports
+          --nvdApiKey ${{ secrets.NVD_API_KEY }}
 
       - name: Upload Report
         uses: actions/upload-artifact@v4
