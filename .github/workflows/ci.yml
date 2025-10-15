@@ -37,7 +37,7 @@ jobs:
   test:
     name: Run Unit Tests
     runs-on: ubuntu-latest
-    needs: build # ensures build runs before tests
+    needs: build
 
     steps:
       - name: Checkout code
@@ -68,3 +68,65 @@ jobs:
           flags: unittests
           name: codecov
           fail_ci_if_error: false
+
+  security-scan:
+    name: Security Scan (SAST + SCA)
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # -------------------------
+      # SAST: SEMGREP
+      # -------------------------
+      - name: Install Semgrep
+        run: pip install semgrep
+
+      - name: Run Semgrep (SAST)
+        run: |
+          semgrep --config=p/ci --json --output=semgrep-report.json || true
+          python - <<'PY'
+          import json, sys
+          with open('semgrep-report.json') as f:
+              data = json.load(f)
+          findings = [r for r in data.get('results', []) if r.get('extra', {}).get('severity') in ['ERROR','HIGH','CRITICAL']]
+          if findings:
+              print(f"❌ SAST found {len(findings)} high/critical issues")
+              for fnd in findings:
+                  print(f"- {fnd['check_id']} at {fnd['path']}:{fnd['start']['line']}")
+              sys.exit(1)
+          else:
+              print("✅ No high/critical SAST issues")
+          PY
+
+      # -------------------------
+      # SCA: TRIVY
+      # -------------------------
+      - name: Install Trivy
+        run: |
+          sudo apt-get update && sudo apt-get install -y wget
+          wget https://github.com/aquasecurity/trivy/releases/latest/download/trivy_$(uname -s)_$(uname -m).tar.gz
+          tar zxvf trivy_*.tar.gz
+          sudo mv trivy /usr/local/bin/
+
+      - name: Run Trivy (SCA)
+        run: |
+          trivy fs --severity HIGH,CRITICAL --format json -o trivy-report.json .
+          jq '.Results[].Vulnerabilities[] | select(.Severity=="HIGH" or .Severity=="CRITICAL")' trivy-report.json > filtered.json || true
+          if [ -s filtered.json ]; then
+            echo "❌ High/Critical vulnerabilities found:"
+            cat filtered.json
+            exit 1
+          else
+            echo "✅ No high/critical SCA vulnerabilities found"
+          fi
+
+      - name: Upload scan reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-reports
+          path: |
+            semgrep-report.json
+            trivy-report.json
