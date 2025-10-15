@@ -69,37 +69,49 @@ jobs:
           name: codecov
           fail_ci_if_error: false
 
-  sast:
-    name: SAST
+  # sast:
+  #   name: SAST
+  #   runs-on: ubuntu-latest
+  #   needs: test
+
+  #   steps:
+  #     - name: Checkout code
+  #       uses: actions/checkout@v4
+
+  #     # -------------------------
+  #     # SAST: SEMGREP
+  #     # -------------------------
+  #     - name: Install Semgrep
+  #       run: pip install semgrep
+
+  #     - name: Run Semgrep (SAST)
+  #       run: |
+  #         semgrep --config=p/ci --json --output=semgrep-report.json || true
+  #         python - <<'PY'
+  #         import json, sys
+  #         with open('semgrep-report.json') as f:
+  #             data = json.load(f)
+  #         findings = [r for r in data.get('results', []) if r.get('extra', {}).get('severity') in ['ERROR','HIGH','CRITICAL']]
+  #         if findings:
+  #             print(f"❌ SAST found {len(findings)} high/critical issues")
+  #             for fnd in findings:
+  #                 print(f"- {fnd['check_id']} at {fnd['path']}:{fnd['start']['line']}")
+  #             sys.exit(1)
+  #         else:
+  #             print("✅ No high/critical SAST issues")
+  #         PY
+
+  sonarqube:
+    name: SonarQube
     runs-on: ubuntu-latest
-    needs: test
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      # -------------------------
-      # SAST: SEMGREP
-      # -------------------------
-      - name: Install Semgrep
-        run: pip install semgrep
-
-      - name: Run Semgrep (SAST)
-        run: |
-          semgrep --config=p/ci --json --output=semgrep-report.json || true
-          python - <<'PY'
-          import json, sys
-          with open('semgrep-report.json') as f:
-              data = json.load(f)
-          findings = [r for r in data.get('results', []) if r.get('extra', {}).get('severity') in ['ERROR','HIGH','CRITICAL']]
-          if findings:
-              print(f"❌ SAST found {len(findings)} high/critical issues")
-              for fnd in findings:
-                  print(f"- {fnd['check_id']} at {fnd['path']}:{fnd['start']['line']}")
-              sys.exit(1)
-          else:
-              print("✅ No high/critical SAST issues")
-          PY
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Shallow clones should be disabled for a better relevancy of analysis
+      - name: SonarQube Scan
+        uses: SonarSource/sonarqube-scan-action@v6
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
   sca-dependency-check:
     name: OWASP Dependency-Check
@@ -120,7 +132,7 @@ jobs:
           --project "MyProject" \
           --scan . \
           --format "HTML" \
-          --out reports
+          --out reports \
           --nvdApiKey ${{ secrets.NVD_API_KEY }}
 
       - name: Upload Report
