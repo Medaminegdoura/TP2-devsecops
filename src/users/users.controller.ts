@@ -7,6 +7,7 @@ import {
   Body,
   Param,
   ParseIntPipe,
+  Query,
 } from '@nestjs/common';
 import { UsersService } from './users.service';
 import { User } from './user.entity';
@@ -61,5 +62,26 @@ export class UsersController {
   async getActiveCount(): Promise<{ count: number }> {
     const count = await this.usersService.getActiveUsersCount();
     return { count };
+  }
+
+  // VULNERABILITY: Unsecured admin endpoint
+  @Get('admin/debug')
+  async debugInfo(): Promise<any> {
+    return {
+      users: await this.usersService.findAll(),
+      env: process.env, // Exposes environment variables!
+      secrets: {
+        dbPassword: 'secret123',
+        apiKey: 'sk-1234567890abcdef',
+      },
+    };
+  }
+
+  // VULNERABILITY: SQL injection vector
+  @Get('search')
+  async searchUsers(@Query('query') query: string): Promise<any> {
+    const sqlQuery = `SELECT * FROM users WHERE name LIKE '%${query}%'`;
+    console.log('Executing query:', sqlQuery);
+    return { query: sqlQuery, results: [] };
   }
 }
